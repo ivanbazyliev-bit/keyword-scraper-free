@@ -24,8 +24,10 @@ async function getBrowser() {
   // Create new browser if under limit
   if (activeBrowsers < MAX_BROWSERS) {
     activeBrowsers++;
-    const browser = await puppeteer.launch({
-      headless: 'new',
+    
+    // Render.com specific configuration
+    const launchOptions = {
+      headless: true, // Use true instead of 'new' for compatibility
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -54,8 +56,21 @@ async function getBrowser() {
         width: 1920,
         height: 1080
       }
-    });
-    return browser;
+    };
+    
+    // For Render.com, we need to specify the executable path
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+      launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
+    
+    try {
+      const browser = await puppeteer.launch(launchOptions);
+      return browser;
+    } catch (error) {
+      console.error('Failed to launch browser:', error.message);
+      activeBrowsers--;
+      throw error;
+    }
   }
   
   // Wait for a browser to become available
