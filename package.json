@@ -6,7 +6,8 @@
   "license": "MIT",
   "author": "Your Name",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "npm install && npx puppeteer browsers install chrome"
   },
   "dependencies": {
     "express": "^4.18.2",
