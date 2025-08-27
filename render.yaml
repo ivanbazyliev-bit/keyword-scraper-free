@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: keyword-scraper
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: false
+      - key: PUPPETEER_EXECUTABLE_PATH
+        value: /usr/bin/google-chrome-stable
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
+    plan: starter
+    region: oregon
