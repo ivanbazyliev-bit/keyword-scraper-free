@@ -1,14 +1,86 @@
 const puppeteer = require('puppeteer');
 
+// Browser pool for reuse
+let browserPool = [];
+const MAX_BROWSERS = 3;
+let activeBrowsers = 0;
+
 /**
- * Extract keywords from HTML content (exact Python logic)
+ * Get or create a browser instance from pool
+ */
+async function getBrowser() {
+  // Try to reuse existing browser
+  if (browserPool.length > 0) {
+    const browser = browserPool.pop();
+    try {
+      // Check if browser is still alive
+      await browser.version();
+      return browser;
+    } catch (e) {
+      // Browser is dead, create new one
+    }
+  }
+  
+  // Create new browser if under limit
+  if (activeBrowsers < MAX_BROWSERS) {
+    activeBrowsers++;
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-blink-features=AutomationControlled',
+        '--window-size=1920,1080',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-features=VizDisplayCompositor',
+        '--memory-pressure-off',
+        '--max-old-space-size=512',
+        '--single-process',
+        '--no-zygote',
+        '--disable-extensions',
+        '--disable-plugins',
+        '--disable-images',
+        '--disable-javascript-harmony-shipping',
+        '--disable-webgl',
+        '--disable-webgl2',
+      ],
+      defaultViewport: {
+        width: 1920,
+        height: 1080
+      }
+    });
+    return browser;
+  }
+  
+  // Wait for a browser to become available
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  return getBrowser();
+}
+
+/**
+ * Return browser to pool
+ */
+function returnBrowser(browser) {
+  if (browser && browserPool.length < MAX_BROWSERS) {
+    browserPool.push(browser);
+  } else if (browser) {
+    browser.close().catch(() => {});
+    activeBrowsers--;
+  }
+}
+
+/**
+ * Extract keywords from HTML content using Python patterns
  */
 function extractKeywordsFromHtml(htmlContent) {
   if (!htmlContent) return '';
   
-  console.log('🔍 Extracting keywords from HTML...');
-  
-  // Same delimiters as your Python version
   const delimiters = [
     ['&quot;terms&quot;:&quot;', '&quot;,'],
     ['"terms":"', '",'],
@@ -27,7 +99,6 @@ function extractKeywordsFromHtml(htmlContent) {
           if (endIndex !== -1) {
             const keywords = afterStart.substring(0, endIndex).trim();
             if (keywords) {
-              console.log(`✅ Found HTML keywords using pattern ${startDelim}: ${keywords.substring(0, 50)}...`);
               return keywords;
             }
           }
@@ -38,16 +109,13 @@ function extractKeywordsFromHtml(htmlContent) {
     }
   }
   
-  console.log('❌ No HTML keywords found');
   return '';
 }
 
 /**
- * Accept cookies on page (same as Python accept_cookies)
+ * Accept cookies dialogs
  */
 async function acceptCookies(page) {
-  console.log('🍪 Attempting to accept cookies...');
-  
   const selectors = [
     'button:has-text("Accept")',
     'button:has-text("Agree")', 
@@ -63,12 +131,15 @@ async function acceptCookies(page) {
   
   for (const selector of selectors) {
     try {
-      await page.waitForSelector(selector, { timeout: 3000 });
-      const element = await page.$(selector);
-      if (element) {
-        await element.click();
-        await page.waitForTimeout(1000);
-        console.log('✅ Cookie dialog accepted');
+      // Use XPath for text matching
+      const xpath = selector.includes(':has-text(') 
+        ? `//button[contains(text(), "${selector.match(/"([^"]+)"/)[1]}")]`
+        : selector;
+      
+      const elements = await page.$x(xpath);
+      if (elements.length > 0) {
+        await elements[0].click();
+        await page.waitForTimeout(500);
         return true;
       }
     } catch (error) {
@@ -76,68 +147,74 @@ async function acceptCookies(page) {
     }
   }
   
-  console.log('ℹ️ No cookie dialog found');
+  // Try CSS selectors for class/id based
+  for (const selector of selectors.filter(s => s.includes('[') || s.includes('#'))) {
+    try {
+      const element = await page.$(selector);
+      if (element) {
+        await element.click();
+        await page.waitForTimeout(500);
+        return true;
+      }
+    } catch (error) {
+      continue;
+    }
+  }
+  
   return false;
 }
 
 /**
- * Extract surface keywords from spans (exact Python logic)
+ * Extract surface keywords from iframe spans (Python logic)
  */
 async function extractSurfaceKeywords(page) {
-  console.log('🎯 Extracting surface keywords from spans...');
-  
   const kValues = {};
   
   try {
-    // Return to main content (same as Python)
+    // Bring page to front
     await page.bringToFront();
     
-    // Wait for iframe with ID 'master-1' (exact Python logic)
+    // Look for iframe with ID 'master-1'
+    let iframe = null;
     try {
-      console.log('🔍 Looking for iframe #master-1...');
-      await page.waitForSelector('#master-1', { timeout: 10000 });
+      // Wait for iframe to appear
+      await page.waitForSelector('#master-1', { timeout: 5000 });
       
       const iframeElement = await page.$('#master-1');
       if (!iframeElement) {
-        console.log('❌ Iframe element not found');
-        // Fill with empty values (same as Python)
+        // Fill with empty values
         for (let i = 1; i <= 10; i++) {
           kValues[`k${i}`] = '';
         }
         return '';
       }
       
-      // Switch to found iframe (same as Python)
-      const iframe = await iframeElement.contentFrame();
+      // Get iframe content
+      iframe = await iframeElement.contentFrame();
       if (!iframe) {
-        console.log('❌ Could not access iframe content');
-        // Fill with empty values (same as Python)
+        // Fill with empty values
         for (let i = 1; i <= 10; i++) {
           kValues[`k${i}`] = '';
         }
         return '';
       }
       
-      console.log('✅ Successfully accessed iframe');
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(1000);
       
-      // Search for elements with class "p_.si34.span" (exact Python selector)
-      console.log('🔍 Looking for .p_.si34.span elements...');
+      // Look for elements with class "p_.si34.span"
       const elements = await iframe.$$('.p_.si34.span');
-      console.log(`📊 Found ${elements.length} span elements`);
       
-      // Take max 10 elements (same as Python)
+      // Take max 10 elements
       const limitedElements = elements.slice(0, 10);
       
-      // Create k1, k2, ..., k10 (exact Python logic)
+      // Extract text from each element
       for (let i = 0; i < 10; i++) {
         if (i < limitedElements.length) {
           try {
-            const text = await limitedElements[i].evaluate(el => el.innerText || el.textContent);
+            const text = await limitedElements[i].evaluate(el => {
+              return el.innerText || el.textContent || '';
+            });
             kValues[`k${i + 1}`] = text ? text.trim() : '';
-            if (text && text.trim()) {
-              console.log(`📝 k${i + 1}: ${text.trim()}`);
-            }
           } catch (error) {
             kValues[`k${i + 1}`] = '';
           }
@@ -147,22 +224,20 @@ async function extractSurfaceKeywords(page) {
       }
       
     } catch (error) {
-      console.log(`❌ Error working with iframe: ${error.message}`);
-      // Fill with empty values (same as Python)
+      // Fill with empty values if iframe not found
       for (let i = 1; i <= 10; i++) {
         kValues[`k${i}`] = '';
       }
     }
     
   } catch (error) {
-    console.log(`❌ Error in extractSurfaceKeywords: ${error.message}`);
-    // Fill with empty values (same as Python)
+    // Fill with empty values on error
     for (let i = 1; i <= 10; i++) {
       kValues[`k${i}`] = '';
     }
   }
   
-  // Collect span keywords into one string separated by commas (exact Python logic)
+  // Collect non-empty keywords into comma-separated string
   const spanKeywordsList = [];
   for (let i = 1; i <= 10; i++) {
     const value = kValues[`k${i}`] || '';
@@ -171,135 +246,94 @@ async function extractSurfaceKeywords(page) {
     }
   }
   
-  const keywordsSpanString = spanKeywordsList.join(', ');
-  
-  if (keywordsSpanString) {
-    console.log(`✅ Surface keywords result: ${keywordsSpanString}`);
-  } else {
-    console.log('❌ No surface keywords found');
-  }
-  
-  return keywordsSpanString;
+  return spanKeywordsList.join(', ');
 }
 
 /**
- * Process single URL (equivalent to Python process_url method)
+ * Process URL with optimized browser reuse
  */
 async function processUrl(url, parserCountry = 'Unknown') {
-  console.log(`\n🚀 Processing: ${url}`);
   const startTime = Date.now();
   
-  // Browser configuration (same as your Python args)
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--disable-features=VizDisplayCompositor',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      '--disable-backgrounding-occluded-windows',
-      '--memory-pressure-off',
-      '--max-old-space-size=512',
-      '--disable-extensions',
-      '--disable-plugins',
-      '--disable-images', // Speed up loading
-    ]
-  });
-  
-  let page;
+  let browser = null;
+  let page = null;
   
   try {
+    // Get browser from pool
+    browser = await getBrowser();
+    
+    // Create new page with optimized settings
     page = await browser.newPage();
     
-    // Set user agent (same as Python)
+    // Block unnecessary resources
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const resourceType = req.resourceType();
+      if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+    
+    // Set user agent
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
-    // Set viewport (same as Python)
+    // Set viewport
     await page.setViewport({ width: 1920, height: 1080 });
     
-    // Set timeout (15 seconds like Python BROWSER_TIMEOUT)
+    // Set timeout
     page.setDefaultTimeout(15000);
     
-    // Load the page with timeout (same as Python)
+    // Navigate to URL
     try {
-      console.log('📄 Loading page...');
       await page.goto(url, { 
-        waitUntil: 'domcontentloaded', 
+        waitUntil: 'domcontentloaded',
         timeout: 15000 
       });
+      
+      // Wait a bit for dynamic content
       await page.waitForTimeout(2000);
-      console.log('✅ Page loaded successfully');
+      
     } catch (timeoutError) {
-      console.log(`⏰ Timeout loading URL ${url}: ${timeoutError.message}`);
       return {
         scraped_keywords: '',
         surface_keywords: '',
         success: false,
-        error: 'Timeout loading page',
+        error: `Timeout: ${timeoutError.message}`,
         processing_time_ms: Date.now() - startTime
       };
     }
     
-    try {
-      // Get original keywords from HTML (same as Python)
-      console.log('📊 Getting page source...');
-      const pageSource = await page.content();
-      let keywordsOriginal = extractKeywordsFromHtml(pageSource);
+    // Extract HTML keywords
+    const pageSource = await page.content();
+    let scrapedKeywords = extractKeywordsFromHtml(pageSource);
+    
+    // Extract surface keywords from iframe spans
+    let surfaceKeywords = await extractSurfaceKeywords(page);
+    
+    // If no keywords found, try accepting cookies and retry
+    if (!scrapedKeywords && !surfaceKeywords) {
+      await acceptCookies(page);
+      await page.waitForTimeout(2000);
       
-      // Get span keywords (same as Python EXTENDED_MODE)
-      let keywordsSpanString = await extractSurfaceKeywords(page);
-      
-      // If nothing found - try cookies (same as Python logic)
-      if (!keywordsOriginal && !keywordsSpanString) {
-        console.log('🔄 No keywords found, trying cookie acceptance...');
-        await acceptCookies(page);
-        await page.waitForTimeout(2000);
-        
-        // Try again after accepting cookies
-        const newPageSource = await page.content();
-        keywordsOriginal = extractKeywordsFromHtml(newPageSource);
-        keywordsSpanString = await extractSurfaceKeywords(page);
-      }
-      
-      const processingTime = Date.now() - startTime;
-      
-      // Log results (same as Python)
-      if (keywordsOriginal) {
-        console.log(`✅ Found scraped keywords: ${keywordsOriginal.substring(0, 100)}...`);
-      }
-      if (keywordsSpanString) {
-        console.log(`✅ Found surface keywords: ${keywordsSpanString.substring(0, 100)}...`);
-      }
-      
-      if (!keywordsOriginal && !keywordsSpanString) {
-        console.log(`❌ No keywords found for URL: ${url}`);
-      }
-      
-      console.log(`⏱️ Processing completed in ${processingTime}ms`);
-      
-      return {
-        scraped_keywords: keywordsOriginal || '',
-        surface_keywords: keywordsSpanString || '',
-        success: true,
-        error: '',
-        processing_time_ms: processingTime
-      };
-      
-    } catch (innerError) {
-      console.log(`❌ Error extracting keywords: ${innerError.message}`);
-      return {
-        scraped_keywords: '',
-        surface_keywords: '',
-        success: false,
-        error: innerError.message,
-        processing_time_ms: Date.now() - startTime
-      };
+      // Retry extraction after cookies
+      const newPageSource = await page.content();
+      scrapedKeywords = extractKeywordsFromHtml(newPageSource);
+      surfaceKeywords = await extractSurfaceKeywords(page);
     }
+    
+    const processingTime = Date.now() - startTime;
+    
+    return {
+      scraped_keywords: scrapedKeywords || '',
+      surface_keywords: surfaceKeywords || '',
+      success: true,
+      error: '',
+      processing_time_ms: processingTime
+    };
     
   } catch (error) {
-    console.log(`❌ General error processing URL: ${error.message}`);
     return {
       scraped_keywords: '',
       surface_keywords: '',
@@ -308,10 +342,43 @@ async function processUrl(url, parserCountry = 'Unknown') {
       processing_time_ms: Date.now() - startTime
     };
   } finally {
-    if (page) await page.close();
-    await browser.close();
-    console.log('🧹 Browser closed');
+    // Clean up page
+    if (page) {
+      await page.close().catch(() => {});
+    }
+    
+    // Return browser to pool
+    if (browser) {
+      returnBrowser(browser);
+    }
   }
 }
 
-module.exports = { processUrl };
+/**
+ * Clean up browser pool
+ */
+async function cleanup() {
+  const browsers = [...browserPool];
+  browserPool = [];
+  
+  for (const browser of browsers) {
+    try {
+      await browser.close();
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+  activeBrowsers = 0;
+}
+
+// Handle process termination
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);
+process.on('exit', cleanup);
+
+module.exports = { 
+  processUrl,
+  cleanup,
+  extractKeywordsFromHtml,
+  extractSurfaceKeywords
+};
