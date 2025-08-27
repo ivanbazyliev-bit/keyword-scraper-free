@@ -3,13 +3,15 @@
   "version": "2.0.0",
   "description": "Optimized keyword scraper with Puppeteer",
   "main": "server.js",
+  "license": "MIT",
+  "author": "Your Name",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "puppeteer": "^21.11.0",
+    "puppeteer": "^23.5.0",
     "p-limit": "^3.1.0"
   },
   "engines": {
